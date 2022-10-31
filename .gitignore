@@ -171,3 +171,4 @@ src/wandb/
 src/save_feat/
 src/results
 src/data/
+src/pretrained/

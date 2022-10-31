@@ -1,9 +1,14 @@
 import os
 import torch
 import numpy as np
+import warnings
+warnings.filterwarnings("ignore")
+
 import torchvision.datasets as datasets
 import torchvision.transforms as transforms
 
+
+DATA_BACKEND_CHOICES = ['pytorch']
 
 try:
     from nvidia.dali.plugin.pytorch import DALIClassificationIterator
@@ -185,8 +190,8 @@ class PrefetchedWrapper(object):
 
         for next_input, next_target in loader:
             with torch.cuda.stream(stream):
-                next_input = next_input.cuda(async=True)
-                next_target = next_target.cuda(async=True)
+                next_input = next_input.cuda(non_blocking=True)
+                next_target = next_target.cuda(non_blocking=True)
                 next_input = next_input.float()
                 next_input = next_input.sub_(mean).div_(std)
 
@@ -230,7 +235,7 @@ def get_pytorch_train_loader(data_path, batch_size, workers=5, _worker_init_fn=N
 
     train_loader = torch.utils.data.DataLoader(
             train_dataset, batch_size=batch_size, shuffle=(train_sampler is None),
-            num_workers=workers, worker_init_fn=_worker_init_fn, pin_memory=True, sampler=train_sampler, collate_fn=fast_collate)
+            num_workers=workers, worker_init_fn=_worker_init_fn, pin_memory=False, sampler=train_sampler, collate_fn=fast_collate)
 
     return PrefetchedWrapper(train_loader), len(train_loader)
 
@@ -251,7 +256,7 @@ def get_pytorch_val_loader(data_path, batch_size, workers=5, _worker_init_fn=Non
             val_dataset,
             sampler=val_sampler,
             batch_size=batch_size, shuffle=False,
-            num_workers=workers, worker_init_fn=_worker_init_fn, pin_memory=True,
+            num_workers=workers, worker_init_fn=_worker_init_fn, pin_memory=False,
             collate_fn=fast_collate)
 
     return PrefetchedWrapper(val_loader), len(val_loader)
