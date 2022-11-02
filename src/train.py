@@ -62,17 +62,30 @@ def main(args):
 
     # create model
     print("=> Creating model '{}'".format(cfg.network))
-    model = get_model(cfg.network, num_classes=cfg.num_classes, width_mult=cfg.width_mult)
+    # Use pretrained imagenet
+    if cfg.pretrained and not cfg.resume:
+        if os.path.isfile(cfg.pretrained):
+            print("=> loading pretrained '{}'".format(cfg.pretrained))
+            model = get_model(cfg.network, num_classes=1000, width_mult=cfg.width_mult)
+            state_dict = torch.load(cfg.pretrained)
+            model.load_state_dict(state_dict)
+            # Change output features of last linear layer
+            model.classifier[3] = nn.Linear(model.classifier[3].in_features, cfg.num_classes)
+    # Do not use pretrained imagenet
+    else:
+        model = get_model(cfg.network, num_classes=cfg.num_classes, width_mult=cfg.width_mult)
 
+    # Use distributed
     if not cfg.distributed:
-        model = torch.nn.DataParallel(model).cuda()
+        # model = torch.nn.DataParallel(model).cuda()
+        model = model.cuda()
     else:
         model.cuda()
         model = torch.nn.parallel.DistributedDataParallel(model)
 
     # define loss function (criterion) and optimizer
     criterion = nn.CrossEntropyLoss().cuda()
-    
+    # criterion = nn.BCELoss().cuda()
     optimizer = torch.optim.SGD(model.parameters(), cfg.lr,
                                 momentum=cfg.momentum,
                                 weight_decay=cfg.weight_decay)
@@ -83,14 +96,12 @@ def main(args):
         mkdir_p(cfg.output)
     
     start_epoch = 0
+        
     if cfg.resume:
         if os.path.isfile(cfg.checkpoint):
             print("=> loading checkpoint '{}'".format(cfg.checkpoint))
             checkpoint = torch.load(cfg.checkpoint)
-            start_epoch = checkpoint['epoch']
-            best_prec = checkpoint['best_prec']
-            model.load_state_dict(checkpoint['state_dict'])
-            optimizer.load_state_dict(checkpoint['optimizer'])
+            model.load_state_dict(checkpoint)
             print("=> loaded checkpoint '{}' (epoch {})"
                   .format(cfg.checkpoint, checkpoint['epoch']))
             cfg.checkpoint = os.path.dirname(cfg.checkpoint)
@@ -119,16 +130,10 @@ def main(args):
     val_loader, val_loader_len = get_val_loader(cfg.data_dir, cfg.batch_size, workers=cfg.workers, input_size=cfg.input_size)
 
     if cfg.evaluate:
-        from collections import OrderedDict
         if os.path.isfile(cfg.weights):
             print("=> loading pretrained weight '{}'".format(cfg.weights))
-            source_state = torch.load(cfg.weights)
-            target_state = OrderedDict()
-            for k, v in source_state.items():
-                if k[:7] != 'module.':
-                    k = 'module.' + k
-                target_state[k] = v
-            model.load_state_dict(target_state)
+            state_dict = torch.load(cfg.weights)
+            model.load_state_dict(state_dict)
         else:
             print("=> no weight found at '{}'".format(cfg.weights))
 
@@ -141,7 +146,7 @@ def main(args):
 
         # train for one epoch
         train_loss, train_acc = train(train_loader, train_loader_len, model, criterion, optimizer, epoch, cfg)
-
+        
         # evaluate on validation set
         val_loss, prec = validate(val_loader, val_loader_len, model, criterion, cfg)
 
@@ -152,13 +157,10 @@ def main(args):
         
         is_best = prec > best_prec
         best_prec = max(prec, best_prec)
-        save_checkpoint({
-            'epoch': epoch + 1,
-            'network': cfg.network,
-            'state_dict': model.state_dict(),
-            'best_prec': best_prec,
-            'optimizer' : optimizer.state_dict(),
-        }, is_best, checkpoint=cfg.output, filename='checkpoints_{}.pth'.format(epoch))
+        if is_best:
+            save_checkpoint(model.state_dict(), 
+                            is_best, checkpoint=cfg.output, 
+                            filename='checkpoints_{}.pth'.format(epoch))
         
         # Wandb Logger
         log_dict = {"Learning Rate": lr, "Train Loss": train_loss, "Valid Loss": val_loss, "Train Acc" :train_acc, "Valid Acc": prec}

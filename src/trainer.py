@@ -32,7 +32,7 @@ def train(train_loader, train_loader_len, model, criterion, optimizer, epoch, cf
     model.train()
 
     end = time.time()
-    for i, (input, target) in enumerate(train_loader):
+    for i, (inputs, target) in enumerate(train_loader):
         adjust_learning_rate(optimizer, epoch, i, train_loader_len, cfg)
 
         # measure data loading time
@@ -41,13 +41,13 @@ def train(train_loader, train_loader_len, model, criterion, optimizer, epoch, cf
         target = target.cuda(non_blocking=True)
 
         # compute output
-        output = model(input)
+        output = model(inputs)
         loss = criterion(output, target)
 
         # measure accuracy and record loss
         prec = accuracy(output, target, topk=(1,))[0]
-        losses.update(loss.item(), input.size(0))
-        acc.update(prec.item(), input.size(0))
+        losses.update(loss.item(), inputs.size(0))
+        acc.update(prec.item(), inputs.size(0))
 
         # compute gradient and do SGD step
         optimizer.zero_grad()
@@ -69,7 +69,7 @@ def validate(val_loader, val_loader_len, model, criterion, cfg):
     model.eval()
 
     end = time.time()
-    for i, (input, target) in enumerate(val_loader):
+    for i, (inputs, target) in enumerate(val_loader):
         # measure data loading time
         data_time.update(time.time() - end)
 
@@ -77,13 +77,12 @@ def validate(val_loader, val_loader_len, model, criterion, cfg):
 
         with torch.no_grad():
             # compute output
-            output = model(input)
+            output = model(inputs)
             loss = criterion(output, target)
-
         # measure accuracy and record loss
         prec = accuracy(output, target, topk=(1,))[0]
-        losses.update(loss.item(), input.size(0))
-        acc.update(prec.item(), input.size(0))
+        losses.update(loss.item(), inputs.size(0))
+        acc.update(prec.item(), inputs.size(0))
 
         # measure elapsed time
         batch_time.update(time.time() - end)

@@ -224,8 +224,8 @@ def get_pytorch_train_loader(data_path, batch_size, workers=5, _worker_init_fn=N
     train_dataset = datasets.ImageFolder(
             traindir,
             transforms.Compose([
-                transforms.RandomResizedCrop(input_size),
                 transforms.RandomHorizontalFlip(),
+                transforms.ColorJitter(0.4,0.4)
                 ]))
 
     if torch.distributed.is_initialized():
@@ -243,8 +243,7 @@ def get_pytorch_val_loader(data_path, batch_size, workers=5, _worker_init_fn=Non
     valdir = os.path.join(data_path, 'val')
     val_dataset = datasets.ImageFolder(
             valdir, transforms.Compose([
-                transforms.Resize(int(input_size / 0.875)),
-                transforms.CenterCrop(input_size),
+                transforms.Resize(input_size),
                 ]))
 
     if torch.distributed.is_initialized():
