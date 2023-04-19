@@ -177,8 +177,8 @@ def fast_collate(batch):
         nump_array = np.rollaxis(nump_array, 2)
 
         tensor[i] += torch.from_numpy(nump_array)
-
     return tensor, targets
+
 
 class PrefetchedWrapper(object):
     def prefetched_loader(loader):
@@ -196,15 +196,15 @@ class PrefetchedWrapper(object):
                 next_input = next_input.sub_(mean).div_(std)
 
             if not first:
-                yield input, target
+                yield _input, target
             else:
                 first = False
 
             torch.cuda.current_stream().wait_stream(stream)
-            input = next_input
+            _input = next_input
             target = next_target
 
-        yield input, target
+        yield _input, target
 
     def __init__(self, dataloader):
         self.dataloader = dataloader
@@ -218,6 +218,7 @@ class PrefetchedWrapper(object):
 #             self.dataloader.sampler.set_epoch(self.epoch)
         self.epoch += 1
         return PrefetchedWrapper.prefetched_loader(self.dataloader)
+
     
     
 def find_classes(input_path):
@@ -228,7 +229,7 @@ def find_classes(input_path):
 
     import numpy as np
     x = np.unique(list_path)
-    class_to_idx = {cls_name: i for i, cls_name in enumerate(x)}
+    class_to_idx = {cls_name: i for i, cls_name in enumerate(sorted(x))}
     return class_to_idx
 
 def get_pytorch_train_loader(data_path, batch_size, workers=5, _worker_init_fn=None, input_size=224, num_epochs=1):
@@ -237,66 +238,65 @@ def get_pytorch_train_loader(data_path, batch_size, workers=5, _worker_init_fn=N
     from cads_sdk.nosql import codec
     from PIL import Image
     
-    class_to_idx = find_classes('{}_train'.format(data_path))
-    
+    class_to_idx = find_classes('{}_train.parquet'.format(data_path))
     
     def _transform_row(row):
         transform = transforms.Compose([
+                transforms.RandomResizedCrop(input_size),
                 transforms.RandomHorizontalFlip(),
-                transforms.ColorJitter(0.4,0.4)
                 ])
-        _input = transform(Image.fromarray(row['image'][:, :, (2, 1, 0)]))
-        target = os.path.basename(os.path.dirname(row['path']))
         return  {
-            'image': _input,
-            'path': class_to_idx[target]
+            'image': transform(row['image']),
+            'path': class_to_idx[os.path.basename(os.path.dirname(row['path']))]
         }
+
     
     transform = TransformSpec(_transform_row, removed_fields=['size'])
     
-    reader = make_reader('{}_train'.format(data_path), 
+    reader = make_reader('{}_train.parquet'.format(data_path), 
                     reader_pool_type='dummy', num_epochs=num_epochs,
                     transform_spec=transform)
     nrows = 0
     for piece in reader.dataset.pieces:
         nrows += piece.get_metadata().num_rows
+    dataset_len = int(round(nrows/batch_size))
         
     train_loader = DataLoader(reader, 
                     batch_size=batch_size,  
-                    collate_fn=fast_collate)
+                    collate_fn=fast_collate,
+                    shuffling_queue_capacity=int(round(nrows/3)))
 
-    return PrefetchedWrapper(train_loader), nrows
+    return PrefetchedWrapper(train_loader), dataset_len
 
 def get_pytorch_val_loader(data_path, batch_size, workers=5, _worker_init_fn=None, input_size=224):
-    from petastorm.pytorch import DataLoader
+    from cads_sdk.pytorch import DataLoader
     from petastorm import make_reader, TransformSpec
     from cads_sdk.nosql import codec
     from PIL import Image
     
-    class_to_idx = find_classes('{}_val'.format(data_path))
+    class_to_idx = find_classes('{}_val.parquet'.format(data_path))
     
     def _transform_row(row):
         transform = transforms.Compose([
                     transforms.Resize(input_size),
                     ])
-        _input = transform(Image.fromarray(row['image'][:, :, (2, 1, 0)]))
-        target = os.path.basename(os.path.dirname(row['path']))
         return  {
-            'image': _input,
-            'path': class_to_idx[target]
+            'image': transform(row['image']),
+            'path': class_to_idx[os.path.basename(os.path.dirname(row['path']))]
         }
     
 
     transform = TransformSpec(_transform_row, removed_fields=['size'])
-    reader = make_reader('{}_val'.format(data_path), 
+    reader = make_reader('{}_val.parquet'.format(data_path), 
                     reader_pool_type='dummy',
                     transform_spec=transform)
     nrows = 0
     for piece in reader.dataset.pieces:
         nrows += piece.get_metadata().num_rows
+    dataset_len = int(round(nrows/batch_size))
         
     val_loader = DataLoader(reader,
                 batch_size=batch_size,  
                 collate_fn=fast_collate)
 
-    return PrefetchedWrapper(val_loader), nrows
+    return PrefetchedWrapper(val_loader), dataset_len
