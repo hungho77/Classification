@@ -173,3 +173,5 @@ src/results/
 data/
 src/pretrained/
 src/trained_*/
+data/
+src/tmp_sdk/
