@@ -32,7 +32,7 @@ config.entity = "hungho7"
 config.name = "mobilenetv3_large"
 
 # Train
-config.data_dir = "../data/facemask"
+config.data_dir = "file:/home/hunght21/projects/facemaskclassification/data/facemask"
 config.num_classes = 2
 config.epochs = 150
 config.warmup_epoch = 5

@@ -164,8 +164,8 @@ def get_dali_val_loader():
     return gdvl
 
 def fast_collate(batch):
-    imgs = [img[0] for img in batch]
-    targets = torch.tensor([target[1] for target in batch], dtype=torch.int64)
+    imgs = [img['image'] for img in batch]
+    targets = torch.tensor([target['path'] for target in batch], dtype=torch.int64)
     w = imgs[0].size[0]
     h = imgs[0].size[1]
     tensor = torch.zeros( (len(imgs), 3, h, w), dtype=torch.uint8 )
@@ -177,8 +177,8 @@ def fast_collate(batch):
         nump_array = np.rollaxis(nump_array, 2)
 
         tensor[i] += torch.from_numpy(nump_array)
-
     return tensor, targets
+
 
 class PrefetchedWrapper(object):
     def prefetched_loader(loader):
@@ -196,66 +196,107 @@ class PrefetchedWrapper(object):
                 next_input = next_input.sub_(mean).div_(std)
 
             if not first:
-                yield input, target
+                yield _input, target
             else:
                 first = False
 
             torch.cuda.current_stream().wait_stream(stream)
-            input = next_input
+            _input = next_input
             target = next_target
 
-        yield input, target
+        yield _input, target
 
     def __init__(self, dataloader):
         self.dataloader = dataloader
         self.epoch = 0
 
     def __iter__(self):
-        if (self.dataloader.sampler is not None and
-            isinstance(self.dataloader.sampler,
-                       torch.utils.data.distributed.DistributedSampler)):
+#         if (self.dataloader.sampler is not None and
+#             isinstance(self.dataloader.sampler,
+#                        torch.utils.data.distributed.DistributedSampler)):
 
-            self.dataloader.sampler.set_epoch(self.epoch)
+#             self.dataloader.sampler.set_epoch(self.epoch)
         self.epoch += 1
         return PrefetchedWrapper.prefetched_loader(self.dataloader)
 
-def get_pytorch_train_loader(data_path, batch_size, workers=5, _worker_init_fn=None, input_size=224):
-    traindir = os.path.join(data_path, 'train')
-    train_dataset = datasets.ImageFolder(
-            traindir,
-            transforms.Compose([
+    
+    
+def find_classes(input_path):
+    from pyarrow import parquet as pq
+    df = pq.read_table(input_path)
+    list_path = [i['path'] for i in df.select(['path']).to_pylist()]
+    list_path = [os.path.basename(os.path.dirname(i)) for i in list_path]
+
+    import numpy as np
+    x = np.unique(list_path)
+    class_to_idx = {cls_name: i for i, cls_name in enumerate(sorted(x))}
+    return class_to_idx
+
+def get_pytorch_train_loader(data_path, batch_size, workers=5, _worker_init_fn=None, input_size=224, num_epochs=1):
+    from petastorm.pytorch import DataLoader
+    from petastorm import make_reader, TransformSpec
+    from cads_sdk.nosql import codec
+    from PIL import Image
+    
+    class_to_idx = find_classes('{}_train.parquet'.format(data_path))
+    
+    def _transform_row(row):
+        transform = transforms.Compose([
+                transforms.RandomResizedCrop(input_size),
                 transforms.RandomHorizontalFlip(),
-                transforms.ColorJitter(0.4,0.4)
-                ]))
+                ])
+        return  {
+            'image': transform(row['image']),
+            'path': class_to_idx[os.path.basename(os.path.dirname(row['path']))]
+        }
 
-    if torch.distributed.is_initialized():
-        train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset)
-    else:
-        train_sampler = None
+    
+    transform = TransformSpec(_transform_row, removed_fields=['size'])
+    
+    reader = make_reader('{}_train.parquet'.format(data_path), 
+                    reader_pool_type='dummy', num_epochs=num_epochs,
+                    transform_spec=transform)
+    nrows = 0
+    for piece in reader.dataset.pieces:
+        nrows += piece.get_metadata().num_rows
+    dataset_len = int(round(nrows/batch_size))
+        
+    train_loader = DataLoader(reader, 
+                    batch_size=batch_size,  
+                    collate_fn=fast_collate,
+                    shuffling_queue_capacity=int(round(nrows/3)))
 
-    train_loader = torch.utils.data.DataLoader(
-            train_dataset, batch_size=batch_size, shuffle=(train_sampler is None),
-            num_workers=workers, worker_init_fn=_worker_init_fn, pin_memory=False, sampler=train_sampler, collate_fn=fast_collate)
-
-    return PrefetchedWrapper(train_loader), len(train_loader)
+    return PrefetchedWrapper(train_loader), dataset_len
 
 def get_pytorch_val_loader(data_path, batch_size, workers=5, _worker_init_fn=None, input_size=224):
-    valdir = os.path.join(data_path, 'val')
-    val_dataset = datasets.ImageFolder(
-            valdir, transforms.Compose([
-                transforms.Resize(input_size),
-                ]))
+    from cads_sdk.pytorch import DataLoader
+    from petastorm import make_reader, TransformSpec
+    from cads_sdk.nosql import codec
+    from PIL import Image
+    
+    class_to_idx = find_classes('{}_val.parquet'.format(data_path))
+    
+    def _transform_row(row):
+        transform = transforms.Compose([
+                    transforms.Resize(input_size),
+                    ])
+        return  {
+            'image': transform(row['image']),
+            'path': class_to_idx[os.path.basename(os.path.dirname(row['path']))]
+        }
+    
 
-    if torch.distributed.is_initialized():
-        val_sampler = torch.utils.data.distributed.DistributedSampler(val_dataset)
-    else:
-        val_sampler = None
+    transform = TransformSpec(_transform_row, removed_fields=['size'])
+    reader = make_reader('{}_val.parquet'.format(data_path), 
+                    reader_pool_type='dummy',
+                    transform_spec=transform)
+    nrows = 0
+    for piece in reader.dataset.pieces:
+        nrows += piece.get_metadata().num_rows
+    dataset_len = int(round(nrows/batch_size))
+        
+    val_loader = DataLoader(reader,
+                batch_size=batch_size,  
+                collate_fn=fast_collate)
 
-    val_loader = torch.utils.data.DataLoader(
-            val_dataset,
-            sampler=val_sampler,
-            batch_size=batch_size, shuffle=False,
-            num_workers=workers, worker_init_fn=_worker_init_fn, pin_memory=False,
-            collate_fn=fast_collate)
-
-    return PrefetchedWrapper(val_loader), len(val_loader)
+    return PrefetchedWrapper(val_loader), dataset_len
