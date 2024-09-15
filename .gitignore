@@ -169,6 +169,9 @@ src/weights/
 src/train*/
 src/wandb/
 src/save_feat/
-src/results
-src/data/
+src/results/
+data/
 src/pretrained/
+src/trained_*/
+data/
+src/tmp_sdk/
